@@ -1,0 +1,184 @@
+/* OpenRouter Cost Monitor — vanilla JS, EventSource */
+"use strict";
+
+const $ = (id) => document.getElementById(id);
+
+const fmtMoney = (v, digits = 4) =>
+  v == null ? "—" : "$" + Number(v).toFixed(digits);
+
+const fmtInt = (v) => (v == null ? "—" : Number(v).toLocaleString("en-US"));
+
+const fmtTime = (iso) => {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (isNaN(d)) return String(iso);
+  return d.toISOString().replace("T", " ").slice(0, 19) + " UTC";
+};
+
+const fmtLatency = (s) => {
+  if (s == null || isNaN(s)) return "—";
+  return Number(s).toFixed(2);
+};
+
+const fmtPerToken = (v) => {
+  if (v == null || isNaN(v)) return "—";
+  return "$" + Number(v).toFixed(10).replace(/0+$/, "").replace(/\.$/, "");
+};
+
+function renderBalance(b) {
+  $("remaining").textContent = b && b.bought >= 0 ? fmtMoney(b.remaining, 2) : "aguardando…";
+  $("used").textContent = b && b.bought >= 0 ? fmtMoney(b.used, 2) : "—";
+  $("bought").textContent = b && b.bought >= 0 ? fmtMoney(b.bought, 2) : "—";
+}
+
+function renderPrices(prices) {
+  const tb = $("priceRows");
+  tb.innerHTML = "";
+  const sorted = [...(prices || [])].sort((a, b) => (a.model || "").localeCompare(b.model || ""));
+  $("priceEmpty").classList.toggle("hidden", sorted.length > 0);
+  for (const p of sorted) {
+    const tr = document.createElement("tr");
+    tr.innerHTML =
+      `<td class="model">${esc(p.model)}</td>` +
+      `<td class="num">${fmtPerToken(p.prompt)}</td>` +
+      `<td class="num">${fmtPerToken(p.cached)}</td>` +
+      `<td class="num">${fmtPerToken(p.completion)}</td>`;
+    tb.appendChild(tr);
+  }
+}
+
+function renderRecent(rows) {
+  const tb = $("recentRows");
+  tb.innerHTML = "";
+  $("recentEmpty").classList.toggle("hidden", rows.length > 0);
+  const sorted = [...rows].sort((a, b) => new Date(b.minute) - new Date(a.minute));
+  for (const r of sorted) {
+    const tr = document.createElement("tr");
+    tr.innerHTML =
+      `<td>${esc(r.minute)}</td>` +
+      `<td class="model">${esc(r.model)}</td>` +
+      `<td>${esc(r.provider || "")}</td>` +
+      `<td class="num">${fmtInt(r.requests)}</td>` +
+      `<td class="num">${fmtMoney(r.cost)}</td>` +
+      `<td class="num">${fmtInt(r.tokens)}</td>`;
+    tb.appendChild(tr);
+  }
+}
+
+function renderGenerations(rows) {
+  const tb = $("genRows");
+  tb.innerHTML = "";
+  $("genEmpty").classList.toggle("hidden", rows.length > 0);
+  const sorted = [...rows].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+
+  // Column cost annotation: token count + estimated cost, when pricing known.
+  const tk = (tokens, cost, hasPricing) =>
+    hasPricing
+      ? `${fmtInt(tokens)} <span class="sub">${fmtMoney(cost, 6)}</span>`
+      : fmtInt(tokens);
+
+  for (const g of sorted) {
+    const tr = document.createElement("tr");
+    if (g.is_new) tr.className = "isNew";
+    // "In tks" excludes the cached tokens (cached are reported separately).
+    const inTks = (g.tokens_prompt || 0) - (g.tokens_cached || 0);
+    const costCol = g.has_pricing
+      ? `${fmtMoney(g.cost)} <span class="sub">(calc: ${fmtMoney(g.cost_calc, 6)})</span>`
+      : fmtMoney(g.cost);
+    tr.innerHTML =
+      `<td>${fmtTime(g.created_at)}</td>` +
+      `<td class="model">${esc(g.model)}</td>` +
+      `<td>${esc(g.provider)}</td>` +
+      `<td class="num">${tk(g.tokens_cached, g.cost_in_cached, g.has_pricing)}</td>` +
+      `<td class="num">${tk(inTks, g.cost_in, g.has_pricing)}</td>` +
+      `<td class="num">${tk(g.tokens_reasoning, g.cost_reasoning, g.has_pricing)}</td>` +
+      `<td class="num">${tk(g.tokens_completion, g.cost_out, g.has_pricing)}</td>` +
+      `<td class="num">${costCol}</td>`;
+    tb.appendChild(tr);
+  }
+}
+
+function renderBanners(s) {
+  $("errorBanner").classList.toggle("hidden", !s.last_error);
+  if (s.last_error) {
+    $("errorBanner").textContent = "Falha na API: " + s.last_error;
+    $("errorBanner").className = "banner err";
+  }
+  $("warnBanner").classList.toggle("hidden", !s.warn_truncated);
+  if (s.warn_truncated) {
+    $("warnBanner").textContent = "Atenção: resposta analytics truncada (partial) — os totais podem não refletir o uso real.";
+    $("warnBanner").className = "banner warn";
+  }
+}
+
+// Reload indicator: a thin bar that fills toward the next tick and flashes
+// each time a poll completes.
+let loaderTimer = null;
+function pulseLoader(intervalMs) {
+  const bar = $("reloadBar");
+  if (!bar) return;
+  if (loaderTimer) clearInterval(loaderTimer);
+  const start = Date.now();
+  bar.style.width = "0%";
+  loaderTimer = setInterval(() => {
+    const elapsed = Date.now() - start;
+    const pct = Math.min(100, intervalMs > 0 ? (elapsed / intervalMs) * 100 : 0);
+    bar.style.width = pct.toFixed(1) + "%";
+    if (pct >= 100) { clearInterval(loaderTimer); loaderTimer = null; }
+  }, 50);
+  // flash to highlight that a reload just happened
+  bar.classList.remove("flash");
+  void bar.offsetWidth;
+  bar.classList.add("flash");
+}
+
+function renderMeta(s) {
+  $("metaLine").textContent = s.meta_ready
+    ? "conectado à API OpenRouter"
+    : "Meta não disponível: " + (s.last_error || "verificando…");
+
+  if (s.updated_at) {
+    $("lastUpdate").textContent = "atualizado " + fmtTime(s.updated_at);
+  }
+  pulseLoader(s.interval_ms || 0);
+}
+
+function render(s) {
+  renderBalance(s.balance);
+  renderPrices(s.prices);
+  renderRecent(s.hits || []);
+  renderGenerations(s.generations || []);
+  renderBanners(s);
+  renderMeta(s);
+}
+
+function esc(s) {
+  if (s == null) return "";
+  return String(s).replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[c]));
+}
+
+// Initial load + SSE updates
+async function boot() {
+  try {
+    const res = await fetch("/api/state");
+    render(await res.json());
+  } catch (_) { /* first SSE event will cover it */ }
+
+  const es = new EventSource("/api/stream");
+  es.addEventListener("tick", (ev) => {
+    try {
+      render(JSON.parse(ev.data));
+    } catch (e) {
+      console.error("bad tick payload", e);
+    }
+  });
+  es.onerror = () => {
+    $("errorBanner").className = "banner err";
+    $("errorBanner").textContent = "Conexão SSE interrompida; reconectando…";
+    $("errorBanner").classList.remove("hidden");
+  };
+}
+
+boot();

@@ -1,0 +1,138 @@
+/* OpenRouter Cost Monitor dashboard */
+:root {
+  --bg: #0e1116;
+  --panel: #161b24;
+  --panel2: #1c2330;
+  --border: #27303f;
+  --text: #e6ebf2;
+  --muted: #8b96a8;
+  --accent: #4f7cff;
+  --ok: #38c172;
+  --warn: #ffb020;
+  --err: #ff5c5c;
+  --new: rgba(79, 124, 255, 0.25);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.4;
+  padding-bottom: 60px;
+}
+
+.top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(180deg, #141a24, #0e1116);
+  position: sticky;
+  top: 0;
+  z-index: 5;
+}
+
+.brand { font-size: 20px; font-weight: 700; letter-spacing: .3px; }
+.brand span { color: var(--accent); }
+.header-right { display: flex; align-items: center; gap: 14px; }
+.last-update { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.meta { font-size: 12px; color: var(--muted); max-width: 60%; text-align: right; }
+
+/* Reload indicator: thin bar that fills toward the next tick, flashes on reload */
+.reload-wrap {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  height: 3px;
+  background: rgba(255,255,255,.05);
+  z-index: 20;
+}
+.reload-bar {
+  height: 100%;
+  width: 0;
+  background: linear-gradient(90deg, var(--accent), #7aa2ff);
+  transition: width .15s linear;
+}
+.reload-bar.flash {
+  background: linear-gradient(90deg, var(--ok), var(--accent));
+  box-shadow: 0 0 8px rgba(79,124,255,.8);
+}
+
+.banner {
+  margin: 16px 24px 0;
+  padding: 10px 14px;
+  border-radius: 8px;
+  font-size: 14px;
+  border: 1px solid;
+}
+.banner.hidden { display: none; }
+.banner.err { background: rgba(255,92,92,.12); border-color: var(--err); color: var(--err); }
+.banner.warn { background: rgba(255,176,32,.12); border-color: var(--warn); color: var(--warn); }
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 14px;
+  margin: 24px;
+}
+.cards.cards-row { display: flex; flex-wrap: wrap; align-items: stretch; }
+.cards.cards-row > .card { flex: 1 1 180px; }
+
+.balance-pair { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; }
+.bp { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+.bp-label { font-size: 12px; color: var(--muted); }
+.bp-value { font-size: 18px; font-weight: 700; }
+
+.card-prices { flex: 2 1 340px !important; max-width: 100%; }
+.card-prices .grid { max-height: 260px; overflow-y: auto; }
+.card-prices .label { margin-bottom: 12px; }
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px 18px;
+}
+.card .label { font-size: 12px; color: var(--muted); margin-bottom: 8px; text-transform: uppercase; letter-spacing: .5px; }
+.card .value { font-size: 22px; font-weight: 700; }
+.card .value.big { font-size: 30px; color: var(--ok); }
+.card .value.small { font-size: 14px; font-weight: 500; color: var(--muted); }
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  margin: 24px;
+  padding: 18px;
+}
+.panel h2 { font-size: 16px; margin: 0 0 14px; border-bottom: 1px solid var(--border); padding-bottom: 10px; }
+
+table.grid { width: 100%; border-collapse: collapse; font-size: 13px; }
+table.grid th, table.grid td { padding: 8px 10px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
+table.grid th { color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .4px; }
+table.grid .num { text-align: right; font-variant-numeric: tabular-nums; }
+.sub { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+table.grid tr.isNew { background: var(--new); }
+table.grid td.model { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
+
+.empty { color: var(--muted); font-size: 13px; text-align: center; padding: 16px; }
+.empty.hidden { display: none; }
+
+.foot {
+  position: fixed;
+  bottom: 0; left: 0; right: 0;
+  background: var(--panel);
+  border-top: 1px solid var(--border);
+  padding: 10px 24px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.foot strong { color: var(--warn); }
+
+@media (max-width: 760px) {
+  .meta { max-width: 100%; }
+  table.grid { font-size: 11px; }
+}

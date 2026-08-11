@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OpenRouter Spending Cockpit</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="reload-wrap"><div class="reload-bar" id="reloadBar"></div></div>
+
+  <header class="top">
+    <div class="brand">OpenRouter <span>Cost Monitor</span></div>
+    <div class="header-right">
+      <div class="last-update" id="lastUpdate">aguardando…</div>
+      <div class="meta" id="metaLine">descobrindo API…</div>
+    </div>
+  </header>
+
+  <div class="banner hidden" id="errorBanner"></div>
+  <div class="banner warn hidden" id="warnBanner"></div>
+
+  <section class="cards cards-row">
+    <div class="card">
+      <div class="label">Sobra (crédito restante)</div>
+      <div class="value big" id="remaining">—</div>
+    </div>
+    <div class="card">
+      <div class="label">Créditos — comprado / usado</div>
+      <div class="balance-pair">
+        <div class="bp"><span class="bp-label">Comprado</span><span class="bp-value" id="bought">—</span></div>
+        <div class="bp"><span class="bp-label">Usado</span><span class="bp-value" id="used">—</span></div>
+      </div>
+    </div>
+    <div class="card card-prices">
+      <div class="label">Modelos — preço por token (in / in-cached / out)</div>
+      <table class="grid prices">
+        <thead>
+          <tr>
+            <th>Modelo</th>
+            <th class="num">In</th>
+            <th class="num">In-cached</th>
+            <th class="num">Out</th>
+          </tr>
+        </thead>
+        <tbody id="priceRows"></tbody>
+      </table>
+      <p class="empty hidden" id="priceEmpty">Sem modelos com preço buscado ainda.</p>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>Últimos hits (agregado por minuto &amp; modelo)</h2>
+    <table class="grid">
+      <thead>
+        <tr>
+          <th>Minuto (UTC)</th><th>Modelo</th><th>Provedor</th>
+          <th class="num">Requests</th><th class="num">Custo</th><th class="num">Tokens</th>
+        </tr>
+      </thead>
+      <tbody id="recentRows"></tbody>
+    </table>
+    <p class="empty" id="recentEmpty">Sem uso recente ainda.</p>
+  </section>
+
+  <section class="panel">
+    <h2>Chamadas recentes (drilldown por chamada)</h2>
+    <table class="grid">
+      <thead>
+        <tr>
+          <th>Criada em</th>
+          <th>Modelo</th>
+          <th>Provedor</th>
+          <th class="num">In tks Cached</th>
+          <th class="num">In tks</th>
+          <th class="num">Reasoning tks</th>
+          <th class="num">Out tks</th>
+          <th class="num">$</th>
+        </tr>
+      </thead>
+      <tbody id="genRows"></tbody>
+    </table>
+    <p class="empty" id="genEmpty">Nenhuma chamada individual vista ainda (eventualmente consistente).</p>
+  </section>
+
+  <footer class="foot"></footer>
+
+  <script src="/app.js"></script>
+</body>
+</html>
