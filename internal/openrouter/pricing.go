@@ -42,13 +42,56 @@ type modelsResponse struct {
 	Data []modelsItem `json:"data"`
 }
 
-// ModelCatalog is the parsed /models catalog: per-token prices keyed by model
-// slug (Pricing) plus an alias index (Aliases) that maps a normalized display
-// name to its slug, so lookups work whether a call reports the slug or the
-// human-readable model name.
+// ModelCatalog is a parsed, queryable view of GET /models. Prices are stored
+// under the canonical slug ("author/model", e.g. "deepseek/deepseek-v4-flash")
+// and indexed by the human-friendly display name as well, because callbacks
+// (analytics rows, /generation) may report either form.
+//
+// The endpoint reports a single aggregated price per model — OpenRouter does
+// not expose per-provider prices here — so there is exactly one price per
+// model, no matter which provider actually served a request.
 type ModelCatalog struct {
-	Pricing map[string]ModelPricing
-	Aliases map[string]string
+	byModel map[string]ModelPricing // canonical slug -> price
+	aliases map[string]string       // display name -> canonical slug
+}
+
+// Len returns the number of models in the catalog.
+func (c *ModelCatalog) Len() int {
+	if c == nil {
+		return 0
+	}
+	return len(c.byModel)
+}
+
+// Lookup resolves a model id — a canonical slug or a display name — to its
+// per-token price. It returns the price, the canonical slug it was indexed
+// under (stable across lookups of the same model regardless of which spelling
+// was used), and whether it matched.
+func (c *ModelCatalog) Lookup(model string) (ModelPricing, string, bool) {
+	if c == nil {
+		return ModelPricing{}, "", false
+	}
+	// 1. exact canonical-slug hit
+	if p, ok := c.byModel[model]; ok {
+		return p, model, true
+	}
+	// 2. display-name alias -> slug
+	if s, ok := c.aliases[model]; ok {
+		if p, ok := c.byModel[s]; ok {
+			return p, s, true
+		}
+	}
+	// 3. tolerate variant/prefix spellings, e.g. "openai/gpt-4o:free"
+	norm := normalizeModelID(model)
+	if p, ok := c.byModel[norm]; ok {
+		return p, norm, true
+	}
+	if s, ok := c.aliases[norm]; ok {
+		if p, ok := c.byModel[s]; ok {
+			return p, s, true
+		}
+	}
+	return ModelPricing{}, "", false
 }
 
 // ListModels fetches the full model catalog. The endpoint is public; the
@@ -59,12 +102,12 @@ func (c *Client) ListModels(ctx context.Context) (*ModelCatalog, error) {
 		return nil, err
 	}
 	cat := &ModelCatalog{
-		Pricing: make(map[string]ModelPricing, len(raw.Data)),
-		Aliases: make(map[string]string, len(raw.Data)),
+		byModel: make(map[string]ModelPricing, len(raw.Data)),
+		aliases: make(map[string]string, len(raw.Data)),
 	}
 	for _, it := range raw.Data {
-		id := normalizeModelID(it.ID)
-		if id == "" {
+		slug := normalizeModelID(it.ID)
+		if slug == "" {
 			continue
 		}
 		p := ModelPricing{
@@ -80,10 +123,11 @@ func (c *Client) ListModels(ctx context.Context) (*ModelCatalog, error) {
 		if p.Reasoning == 0 {
 			p.Reasoning = p.Completion
 		}
-		cat.Pricing[id] = p
-		// alias the display name -> slug (only if it differs from the id)
-		if name := normalizeModelID(it.Name); name != "" && name != id {
-			cat.Aliases[name] = id
+		cat.byModel[slug] = p
+		// Index the exact display name (colons, case and all) so lookups match
+		// whatever raw form comes back from callbacks.
+		if name := strings.TrimSpace(it.Name); name != "" && name != slug {
+			cat.aliases[name] = slug
 		}
 	}
 	return cat, nil

@@ -103,7 +103,23 @@ Endpoints HTTP: `GET /` (HTML), `/app.js`, `/style.css`, `/api/state` (JSON snap
   `/generation`, `/models`) e verifica que o preço flui para `snapshot.Prices` e que a
   geração fica `HasPricing=true` com `CostCalc>0`. **Passa localmente.**
 
-## BUG PENDENTE — tabela de preços vazia no runtime
+## BUG PENDENTE — ~~tabela de preços vazia no runtime~~ (RESOLVIDO em 2026-08-22)
+
+> **ATUALIZAÇÃO:** a tabela estava vazia porque o `pricingFor` quebrado NUNCA
+> compilava (referenciava `catalogLookup` e `cat` inexistentes) — `go build`
+> falhava antes de gerar binário. A refatoração do mapeamento corrigiu o fluxo:
+> - `openrouter.ModelCatalog` agora é um tipo com `Lookup(model) (price, canonicalSlug, ok)`
+>   e índice de nome de exibição exato (sem truncar em `:`), em `pricing.go`.
+> - O pacote `internal/collector/cmodel` (rascunho) foi REMOVIDO; o collector
+>   usa direto `store.ModelPrice`.
+> - Carregamento preguiçoso do catálogo em `ensureCatalog` (máx. 1x, sem mutex;
+>   roda na goroutine do poll); erro de fetch não é cacheado (retenta no tick).
+> - Sobre provider em pricing: `/models` do OpenRouter só expõe preço agregado
+>   (não por-provider), então o preço NÃO é indexado por provider — a decisão
+>   de design é `(slug) -> preço`, resolvido por slug OU nome de exibição.
+>
+> Se a tabela ainda vier vazia, é o diagnóstico (b): o modelo usado realmente
+> não está no catálogo — ver `pricing: model not found in /models catalog: <id>`.
 
 SINTOMA: `renderPrices` recebe `s.prices == []` sempre. No SSE o handler está correto
 (`render(JSON.parse(ev.data))` — app.js:172); o `{"isTrusted":true}` antigo era só o log

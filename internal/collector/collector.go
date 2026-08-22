@@ -5,7 +5,6 @@ import (
 	"log"
 	"sort"
 	"strconv"
-	"sync"
 	"time"
 
 	"github.com/igor/openrouter-costwatch/internal/openrouter"
@@ -27,11 +26,10 @@ type Collector struct {
 	// throttle enrichment per tick
 	maxEnrichPerTick int
 
-	// per-model pricing catalog (fetched lazily from /models on first use)
-	pricingMu     sync.Mutex
-	catalog       *openrouter.ModelCatalog
-	pricingLoaded bool
-	missLogged    map[string]bool
+	// price catalog, lazily fetched from /models on first use. Owned by the
+	// collector's poll goroutine together with missLogged, so no lock needed.
+	catalog    *openrouter.ModelCatalog
+	missLogged map[string]bool
 }
 
 // New builds a collector. metricsNames and dimensions are ignored here and
@@ -281,74 +279,56 @@ func (c *Collector) pollDrilldown(ctx context.Context) {
 	}
 }
 
-// pricingFor returns the cached per-token pricing for a model, ensuring it has
-// been looked up (and registered). The catalog is loaded at most once. Lookup
-// matches the model slug OR its display name (the /models catalog carries both,
-// and /generation may report either). ok is false when the model is unknown.
-func (c *Collector) pricingFor(ctx context.Context, model string) (openrouter.ModelPricing, bool) {
-	norm := openrouter.NormalizeModelID(model)
-
-	c.pricingMu.Lock()
-	cat := c.catalog
-	loaded := c.pricingLoaded
-	c.pricingMu.Unlock()
-
-	if cat == nil {
-		if loaded {
-			c.logPricingMiss(norm)
-			return openrouter.ModelPricing{}, false
-		}
-		nc, err := c.client.ListModels(ctx)
-		if err != nil {
-			c.store.SetError("pricing: " + err.Error())
-			log.Printf("pricing: catalog fetch failed: %v", err)
-			return openrouter.ModelPricing{}, false
-		}
-		c.pricingMu.Lock()
-		c.catalog = nc
-		c.pricingLoaded = true
-		cat = nc
-		c.pricingMu.Unlock()
-		log.Printf("pricing: loaded %d model prices from /models", len(cat.Pricing))
+// ensureCatalog loads the /models price catalog at most once. Errors are not
+// cached, so a transient failure retries on the next poll tick.
+func (c *Collector) ensureCatalog(ctx context.Context) error {
+	if c.catalog != nil {
+		return nil
 	}
+	cat, err := c.client.ListModels(ctx)
+	if err != nil {
+		return err
+	}
+	c.catalog = cat
+	log.Printf("pricing: loaded %d model prices from /models", cat.Len())
+	return nil
+}
 
-	p, canonical, ok := catalogLookup(cat, norm)
+// pricingFor returns the per-token price for a model, loading the catalog on
+// first use. model may be a canonical slug or a display name (the catalog
+// indexes both). The resolved price is registered with the store under its
+// canonical slug, so the price table fills in from real usage and stays stable
+// even when a callback reports the display name. ok is false when the model is
+// unknown to the catalog (or the catalog could not be loaded).
+func (c *Collector) pricingFor(ctx context.Context, model string) (store.ModelPrice, bool) {
+	if err := c.ensureCatalog(ctx); err != nil {
+		log.Printf("pricing: catalog fetch failed: %v", err)
+		return store.ModelPrice{}, false
+	}
+	p, canonical, ok := c.catalog.Lookup(model)
 	if !ok {
-		c.logPricingMiss(norm)
-		return openrouter.ModelPricing{}, false
+		c.logPricingMiss(model)
+		return store.ModelPrice{}, false
 	}
-	// Register the model under its canonical slug so the price table lists
-	// a stable id even if the call reported a display name.
-	c.store.SetPrice(store.ModelPrice{
+	sp := store.ModelPrice{
 		Model:      canonical,
 		Prompt:     p.Prompt,
 		Cached:     p.Cached,
 		Completion: p.Completion,
 		Reasoning:  p.Reasoning,
-	})
-	return p, true
+	}
+	c.store.SetPrice(sp) // idempotent; first slug wins
+	return sp, true
 }
 
-// logPricingMiss logs a lookup miss once per model so we can see which used
-// models are not in the catalog (helps diagnose an empty price table).
-func (c *Collector) logPricingMiss(norm string) {
-	c.pricingMu.Lock()
-	defer c.pricingMu.Unlock()
-	if c.missLogged[norm] {
+// logPricingMiss logs (once per model) a lookup that did not match the
+// catalog, so unknown models stay visible without spamming every tick.
+func (c *Collector) logPricingMiss(model string) {
+	if c.missLogged[model] {
 		return
 	}
-	c.missLogged[norm] = true
-	log.Printf("pricing: model not found in /models catalog: %q", norm)
-}
-
-// catalogLookup resolves a normalized model id (slug or display name) to a
-// price and its canonical slug.
-func catalogLookup(cat *openrouter.ModelCatalog, norm string) (openrouter.ModelPricing, string, bool) {
-	if id, ok := cat.Aliases[norm]; ok {
-		norm = id
-	}
-	p, ok := cat.Pricing[norm]
-	return p, norm, ok
+	c.missLogged[model] = true
+	log.Printf("pricing: model not found in /models catalog: %q", model)
 }
 
 // applyPricing computes the per-column and total costs for a generation based
