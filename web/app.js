@@ -20,9 +20,14 @@ const fmtLatency = (s) => {
   return Number(s).toFixed(2);
 };
 
-const fmtPerToken = (v) => {
+// Prices come from the API per token; we display them per million tokens (the
+// conventional unit in model pricing), so multiply by 1e6 for display only.
+const MTOK = 1e6;
+
+const fmtPerMTok = (v) => {
   if (v == null || isNaN(v)) return "—";
-  return "$" + Number(v).toFixed(10).replace(/0+$/, "").replace(/\.$/, "");
+  const perM = Number(v) * MTOK;
+  return "$" + perM.toFixed(4).replace(/0+$/, "").replace(/\.$/, "");
 };
 
 function renderBalance(b) {
@@ -40,9 +45,9 @@ function renderPrices(prices) {
     const tr = document.createElement("tr");
     tr.innerHTML =
       `<td class="model">${esc(p.model)}</td>` +
-      `<td class="num">${fmtPerToken(p.prompt)}</td>` +
-      `<td class="num">${fmtPerToken(p.cached)}</td>` +
-      `<td class="num">${fmtPerToken(p.completion)}</td>`;
+      `<td class="num">${fmtPerMTok(p.prompt)}</td>` +
+      `<td class="num">${fmtPerMTok(p.cached)}</td>` +
+      `<td class="num">${fmtPerMTok(p.completion)}</td>`;
     tb.appendChild(tr);
   }
 }
