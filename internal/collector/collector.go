@@ -367,26 +367,26 @@ func (c *Collector) applyPricing(ctx context.Context, gi *store.GenerationInfo) 
 }
 
 func (c *Collector) toGenerationInfo(g *openrouter.Generation) *store.GenerationInfo {
-	ct := time.Now().UTC()
-	if t := openrouter.ParseGenerationTime(g.CreatedAt); !t.IsZero() {
-		ct = t
+	currentTime := time.Now().UTC()
+	if generationTime := openrouter.ParseGenerationTime(g.CreatedAt); !generationTime.IsZero() {
+		currentTime = generationTime
 	}
-	np := g.NativeTokensPrompt
-	if np == 0 && g.TokensPrompt != 0 {
-		np = g.TokensPrompt
+	nativeTokensPrompt := g.NativeTokensPrompt
+	if nativeTokensPrompt == 0 && g.TokensPrompt != 0 {
+		nativeTokensPrompt = g.TokensPrompt
 	}
-	nc := g.NativeTokensCompletion
-	if nc == 0 && g.TokensCompletion != 0 {
-		nc = g.TokensCompletion
+	nativeTokensCompletion := g.NativeTokensCompletion
+	if nativeTokensCompletion == 0 && g.TokensCompletion != 0 {
+		nativeTokensCompletion = g.TokensCompletion
 	}
 	return &store.GenerationInfo{
 		ID:               g.ID,
-		CreatedAt:        ct,
+		CreatedAt:        currentTime,
 		Model:            g.Model,
 		ModelPermaSlug:   g.ModelPermaSlug,
 		Provider:         g.ProviderName,
-		TokensPrompt:     np,
-		TokensCompletion: nc,
+		TokensPrompt:     nativeTokensPrompt,
+		TokensCompletion: nativeTokensCompletion - g.NativeTokensReasoning,
 		TokensReasoning:  g.NativeTokensReasoning,
 		TokensCached:     g.NativeTokensCached,
 		Cost:             g.TotalCost,

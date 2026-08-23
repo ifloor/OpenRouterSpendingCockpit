@@ -76,7 +76,7 @@ function renderRecent(rows) {
       `<td class="model">${esc(r.model)}</td>` +
       `<td>${esc(r.provider || "")}</td>` +
       `<td class="num">${fmtInt(r.requests)}</td>` +
-      `<td class="num">${fmtMoney(r.cost)}</td>` +
+      `<td class="num">${fmtMoney(r.cost, 8)}</td>` +
       `<td class="num">${fmtInt(r.tokens)}</td>`;
     tb.appendChild(tr);
   }
@@ -91,7 +91,7 @@ function renderGenerations(rows) {
   // Column cost annotation: token count + estimated cost, when pricing known.
   const tk = (tokens, cost, hasPricing) =>
     hasPricing
-      ? `${fmtInt(tokens)} <span class="sub">${fmtMoney(cost, 6)}</span>`
+      ? `${fmtInt(tokens)} <span class="sub">${fmtMoney(cost, 8)}</span>`
       : fmtInt(tokens);
 
   for (const g of sorted) {
@@ -100,8 +100,8 @@ function renderGenerations(rows) {
     // "In tks" excludes the cached tokens (cached are reported separately).
     const inTks = (g.tokens_prompt || 0) - (g.tokens_cached || 0);
     const costCol = g.has_pricing
-      ? `${fmtMoney(g.cost)} <span class="sub">(calc: ${fmtMoney(g.cost_calc, 6)})</span>`
-      : fmtMoney(g.cost);
+      ? `${fmtMoney(g.cost, 8)} <span class="sub">(calc: ${fmtMoney(g.cost_calc, 8)})</span>`
+      : fmtMoney(g.cost, 8);
     tr.innerHTML =
       `<td>${fmtTime(g.created_at)}</td>` +
       `<td class="model">${esc(g.model)}</td>` +
