@@ -17,8 +17,8 @@ kilocode.
 ## Build / run
 
 ```sh
-go build -o orcmon .          # requer Go instalado
-OPENROUTER_MANAGEMENT_KEY=sk-or-... ./orcmon -port 8080 -interval 5s -v
+go build -o openrouter-spending-cockpit .   # requer Go instalado
+OPENROUTER_MANAGEMENT_KEY=sk-or-... ./openrouter-spending-cockpit -port 8080 -interval 5s -v
 # abrir http://127.0.0.1:8080
 ```
 
@@ -134,7 +134,7 @@ DIAGNÓSTICO JÁ ADICIONADO (sempre ativo, em `pricingFor`/`logPricingMiss`):
   `pricing: model not found in /models catalog: <id>`
 
 PRÓXIMO PASSO para diagnosticar:
-1. `go build -o orcmon . && OPENROUTER_MANAGEMENT_KEY=sk-or-... ./orcmon -port 8080 -interval 5s`
+1. `go build -o openrouter-spending-cockpit . && OPENROUTER_MANAGEMENT_KEY=sk-or-... ./openrouter-spending-cockpit -port 8080 -interval 5s`
 2. Fazer uso real (rodar o agente).
 3. Verificar no **log do servidor**: se aparece `loaded N ...` e se há `model not found: <id>`.
 4. Abrir `http://127.0.0.1:8080/api/state` e conferir `"prices"` e `"last_error"`.
