@@ -130,45 +130,23 @@ func TestModelsItemUnmarshalAllFields(t *testing.T) {
 	}
 }
 
-func TestModelCatalogLookupCanonicalSlug(t *testing.T) {
-	cat := &ModelCatalog{
-		byModel: map[string]ModelPricing{
-			"meta/muse-spark-1.2-contributor": {Prompt: 1, Completion: 2},
-		},
-		aliases: map[string]string{
-			"meta/muse-spark-1.2-contributor-20260805": "meta/muse-spark-1.2-contributor",
-		},
-	}
-	// A callback referencing either the stable id or the dated canonical slug
-	// must resolve to the same price and canonical key.
-	for _, ref := range []string{
-		"meta/muse-spark-1.2-contributor",
-		"meta/muse-spark-1.2-contributor-20260805",
-	} {
-		p, canonical, ok := cat.Lookup(ref)
-		if !ok {
-			t.Fatalf("Lookup(%q) not found", ref)
-		}
-		if p.Prompt != 1 || p.Completion != 2 {
-			t.Errorf("Lookup(%q) = %+v", ref, p)
-		}
-		if canonical != "meta/muse-spark-1.2-contributor" {
-			t.Errorf("Lookup(%q) canonical = %q, want stable base id", ref, canonical)
-		}
-	}
-}
-
-// TestListModelsIndexesCanonicalSlug verifies that a model can be looked up by
-// its dated canonical_slug as well as by its stable base id.
-func TestListModelsIndexesCanonicalSlug(t *testing.T) {
+func TestProviderPriceLazyLoadAndCache(t *testing.T) {
+	// The model has per-provider pricing. Unknown providers must not match.
+	var endpointsHits int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"data":[{
-			"id":"meta/muse-spark-1.2-contributor",
-			"canonical_slug":"meta/muse-spark-1.2-contributor-20260805",
-			"name":"Meta: Muse Spark 1.2 Contributor",
-			"pricing":{"prompt":"0.0000001","completion":"0.0000002","input_cache_read":"0.000000002"}
-		}]}`))
+		switch r.URL.Path {
+		case "/models":
+			_, _ = w.Write([]byte(`{"data":[{"id":"meta/muse-spark-1.2-contributor"}]}`))
+		case "/models/meta/muse-spark-1.2-contributor/endpoints":
+			endpointsHits++
+			_, _ = w.Write([]byte(`{"data":{"id":"meta/muse-spark-1.2-contributor","endpoints":[
+				{"provider_name":"Meta","pricing":{"prompt":"0.0000001","completion":"0.0000002","input_cache_read":"0.000000002","internal_reasoning":"0.0000003"}},
+				{"provider_name":"Together","pricing":{"prompt":"0.0000005","completion":"0.0000006","web_search":"0.001"}}
+			]}}`))
+		default:
+			http.NotFound(w, r)
+		}
 	}))
 	defer srv.Close()
 
@@ -179,19 +157,118 @@ func TestListModelsIndexesCanonicalSlug(t *testing.T) {
 	if cat.Len() != 1 {
 		t.Fatalf("Len() = %d, want 1", cat.Len())
 	}
-	// The dated canonical slug must resolve to the same price as the base id.
-	p, canonical, ok := cat.Lookup("meta/muse-spark-1.2-contributor-20260805")
+
+	// Provider with full pricing.
+	p, ok := cat.ProviderPrice(context.Background(), "meta/muse-spark-1.2-contributor", "Meta")
 	if !ok {
-		t.Fatal("lookup by canonical_slug failed")
+		t.Fatal("Meta provider not found")
 	}
-	if canonical != "meta/muse-spark-1.2-contributor" {
-		t.Errorf("canonical = %q, want stable base id", canonical)
+	if p.Prompt != 0.0000001 || p.Completion != 0.0000002 || p.Cached != 0.000000002 || p.Reasoning != 0.0000003 {
+		t.Errorf("Meta price = %+v", p)
 	}
-	if p.Prompt != 0.0000001 {
-		t.Errorf("Prompt = %v", p.Prompt)
+
+	// Provider with fallbacks: no reasoning -> completion; no cached -> prompt.
+	p2, ok := cat.ProviderPrice(context.Background(), "meta/muse-spark-1.2-contributor", "Together")
+	if !ok {
+		t.Fatal("Together provider not found")
 	}
-	// The base id spelling must still resolve to the same price.
-	if p2, _, _ := cat.Lookup("meta/muse-spark-1.2-contributor"); p2 != p {
-		t.Errorf("id lookup = %+v, want %+v", p2, p)
+	if p2.Prompt != 0.0000005 || p2.Cached != 0.0000005 || p2.Reasoning != p2.Completion {
+		t.Errorf("Together price (fallbacks) = %+v", p2)
+	}
+
+	// Case-insensitive provider match.
+	if _, ok := cat.ProviderPrice(context.Background(), "meta/muse-spark-1.2-contributor", "together"); !ok {
+		t.Error("case-insensitive provider lookup failed")
+	}
+
+	// Unknown provider must not match.
+	if _, ok := cat.ProviderPrice(context.Background(), "meta/muse-spark-1.2-contributor", "Nope"); ok {
+		t.Error("unknown provider should not match")
+	}
+	// Unknown model must not match and must not hit the network.
+	before := endpointsHits
+	if _, ok := cat.ProviderPrice(context.Background(), "x/y", "Meta"); ok {
+		t.Error("unknown model should not match")
+	}
+	if endpointsHits != before {
+		t.Error("unknown model triggered endpoints fetch")
+	}
+}
+
+func TestProviderPriceHTTPErrorNotCached(t *testing.T) {
+	// A transient server failure is not cached, so a later success is seen.
+	var call int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/models":
+			_, _ = w.Write([]byte(`{"data":[{"id":"a/b"}]}`))
+		case "/models/a/b/endpoints":
+			call++
+			if call == 1 {
+				http.Error(w, "boom", http.StatusInternalServerError)
+				return
+			}
+			_, _ = w.Write([]byte(`{"data":{"endpoints":[{"provider_name":"P","pricing":{"prompt":"0.1"}}]}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	cat, err := NewClientWithBaseURL(srv.URL, "sk-test").ListModels(context.Background())
+	if err != nil {
+		t.Fatalf("ListModels: %v", err)
+	}
+	if _, ok := cat.ProviderPrice(context.Background(), "a/b", "P"); ok {
+		t.Fatal("expected failure on first call")
+	}
+	if _, ok := cat.ProviderPrice(context.Background(), "a/b", "P"); !ok {
+		t.Fatal("expected success after transient failure")
+	}
+	if call != 2 {
+		t.Fatalf("endpoints called %d times, want 2", call)
+	}
+}
+
+// TestListModelsIndexesCanonicalSlug verifies that a model can be looked up by
+// its dated canonical_slug as well as by its stable base id.
+func TestListModelsIndexesCanonicalSlug(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/models":
+			_, _ = w.Write([]byte(`{"data":[{
+				"id":"meta/muse-spark-1.2-contributor",
+				"canonical_slug":"meta/muse-spark-1.2-contributor-20260805",
+				"name":"Meta: Muse Spark 1.2 Contributor",
+				"pricing":{"prompt":"0.0000001","completion":"0.0000002","input_cache_read":"0.000000002"}
+			}]}`))
+		case "/models/meta/muse-spark-1.2-contributor/endpoints":
+			_, _ = w.Write([]byte(`{"data":{"endpoints":[{"provider_name":"Meta","pricing":{"prompt":"0.0000001","completion":"0.0000002","input_cache_read":"0.000000002"}}]}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	cat, err := NewClientWithBaseURL(srv.URL, "sk-test").ListModels(context.Background())
+	if err != nil {
+		t.Fatalf("ListModels: %v", err)
+	}
+	if cat.Len() != 1 {
+		t.Fatalf("Len() = %d, want 1", cat.Len())
+	}
+	if got := cat.Canonical("meta/muse-spark-1.2-contributor-20260805"); got != "meta/muse-spark-1.2-contributor" {
+		t.Errorf("Canonical(dated slug) = %q", got)
+	}
+	// Both id and canonical_slug spellings must resolve the provider price.
+	for _, ref := range []string{
+		"meta/muse-spark-1.2-contributor",
+		"meta/muse-spark-1.2-contributor-20260805",
+	} {
+		if _, ok := cat.ProviderPrice(context.Background(), ref, "Meta"); !ok {
+			t.Errorf("ProviderPrice(%q, Meta) not found", ref)
+		}
 	}
 }

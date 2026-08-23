@@ -69,10 +69,14 @@ type State struct {
 	IntervalMS  int64                `json:"interval_ms"`
 }
 
-// ModelPrice is a cached per-token price for one model (in $ / token),
-// derived from the /models catalog when a generation for that model is seen.
+// ModelPrice is a cached per-token price for a model+provider pair (in
+// $ / token). Provider is empty for models without per-provider breakdown.
+// Found is false when the price for the model could not be determined, so the
+// UI can surface the unknown provider instead of silently skipping it.
 type ModelPrice struct {
 	Model      string  `json:"model"`
+	Provider   string  `json:"provider"`
+	Found      bool    `json:"found"`
 	Prompt     float64 `json:"prompt"`
 	Cached     float64 `json:"cached"`
 	Completion float64 `json:"completion"`
@@ -104,7 +108,7 @@ type Store struct {
 	generations map[string]*GenerationInfo
 	genOrder    []string
 
-	// prices: normalized model id -> per-token prices (deduped)
+	// prices: model+provider -> per-token prices (deduped)
 	prices map[string]ModelPrice
 
 	// recent aggregate rows for "últimos hits", ordered by cost
@@ -288,14 +292,24 @@ func (s *Store) GenerationSeen(id string) bool {
 	return ok
 }
 
-// SetPrice records a per-token price for a model (idempotent; first wins).
+// SetPrice records a per-token price for a model+provider (idempotent; a real
+// price always wins over an earlier "not found" entry, and otherwise the
+// first value seen wins).
 func (s *Store) SetPrice(p ModelPrice) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.prices[p.Model]; ok {
-		return
+	key := s.priceKey(p.Model, p.Provider)
+	if cur, ok := s.prices[key]; ok {
+		if cur.Found || !p.Found {
+			return
+		}
 	}
-	s.prices[p.Model] = p
+	s.prices[key] = p
+}
+
+// priceKey builds the dedup key for a model+provider price row.
+func (s *Store) priceKey(model, provider string) string {
+	return model + "\x00" + provider
 }
 
 // Tick marks that a poll completed and bumps the state version used by SSE.
@@ -403,8 +417,14 @@ func (s *Store) Snapshot() State {
 }
 
 func sortPrices(p []ModelPrice) {
+	less := func(a, b ModelPrice) bool {
+		if a.Model != b.Model {
+			return a.Model < b.Model
+		}
+		return a.Provider < b.Provider
+	}
 	for i := 1; i < len(p); i++ {
-		for j := i; j > 0 && p[j-1].Model > p[j].Model; j-- {
+		for j := i; j > 0 && less(p[j], p[j-1]); j-- {
 			p[j-1], p[j] = p[j], p[j-1]
 		}
 	}

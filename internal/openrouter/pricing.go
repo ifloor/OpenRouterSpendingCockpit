@@ -5,15 +5,15 @@ import (
 	"encoding/json"
 	"strconv"
 	"strings"
+	"sync"
 )
 
-// ModelPricing holds the per-token prices (in USD) for a model, derived from
-// the /models endpoint. Prices rarely change, so it is safe to cache them for
-// the whole run.
+// ModelPricing holds the per-token prices (in USD) for a model as served by a
+// single provider, derived from GET /models/{author}/{model}/endpoints.
 //
 // Fallbacks are applied so that a model only ever needs `prompt` to produce a
 // usable estimate:
-//   - Cached falls back to Prompt when the model has no input_cache_read.
+//   - Cached falls back to Prompt when the provider has no input_cache_read.
 //   - Reasoning falls back to Completion when there is no internal_reasoning.
 type ModelPricing struct {
 	Prompt     float64 // $ per non-cached input token
@@ -75,7 +75,7 @@ type modelReasoning struct {
 	DefaultEffort    string   `json:"default_effort"`
 }
 
-// pricingWire mirrors the pricing object returned by /models. Values arrive as
+// pricingWire mirrors the pricing object returned by the API. Values arrive as
 // decimal strings (e.g. "0.00000095").
 type pricingWire struct {
 	Prompt            string `json:"prompt"`
@@ -90,107 +90,176 @@ type modelsResponse struct {
 	Data []modelsItem `json:"data"`
 }
 
-// ModelCatalog is a parsed, queryable view of GET /models. Prices are stored
-// under the canonical slug ("author/model", e.g. "deepseek/deepseek-v4-flash")
-// and indexed by the human-friendly display name as well, because callbacks
-// (analytics rows, /generation) may report either form. The dated
-// canonical_slug returned by /models is also indexed, so a lookup matches
-// whether it arrives as the stable base id, the canonical slug or the display
-// name; every spelling of the same model resolves to the same price entry.
+// ModelCatalog is a parsed, queryable view of GET /models, kept in memory for
+// the whole run. It answers one question: "what does model X cost when served
+// by provider P?".
 //
-// The endpoint reports a single aggregated price per model — OpenRouter does
-// not expose per-provider prices here — so there is exactly one price per
-// model, no matter which provider actually served a request.
+// The aggregated /models endpoint tells us which models exist and how a model
+// id/name maps to a canonical slug, but its pricing is a blend across
+// providers. Real provider pricing lives behind
+// GET /models/{author}/{model}/endpoints, which this type loads lazily (on
+// first use of a model) and caches in memory for the whole run — per-provider
+// prices are static for practical purposes.
 type ModelCatalog struct {
-	byModel map[string]ModelPricing // canonical slug -> price
-	aliases map[string]string       // display name -> canonical slug
+	client *Client
+
+	mu      sync.Mutex
+	aliases map[string]string // display name OR canonical slug -> canonical slug
+	// known records every canonical slug reported by /models so lookups for
+	// models outside the catalog short-circuit without a network call.
+	known map[string]bool
+
+	// providers holds, per canonical slug, the price per provider.
+	providers map[string]map[string]ModelPricing
+	// loaded tracks canonical slugs whose endpoint list was already fetched,
+	// so a model is only fetched once even across poll ticks.
+	loaded map[string]bool
 }
 
-// Len returns the number of models in the catalog.
+// Len returns the number of models known to the catalog.
 func (c *ModelCatalog) Len() int {
 	if c == nil {
 		return 0
 	}
-	return len(c.byModel)
+	return len(c.known)
 }
 
-// Lookup resolves a model id — a canonical slug or a display name — to its
-// per-token price. It returns the price, the canonical slug it was indexed
-// under (stable across lookups of the same model regardless of which spelling
-// was used), and whether it matched.
-func (c *ModelCatalog) Lookup(model string) (ModelPricing, string, bool) {
+// Canonical resolves any spelling of a model — a canonical slug, the dated
+// canonical_slug or the display name — to the canonical slug.
+func (c *ModelCatalog) Canonical(model string) string {
+	return c.canonical(model)
+}
+
+// canonical resolves any spelling of a model — a canonical slug, the dated
+// canonical_slug or the display name — to the canonical slug.
+func (c *ModelCatalog) canonical(model string) string {
 	if c == nil {
-		return ModelPricing{}, "", false
+		return ""
 	}
-	// 1. exact canonical-slug hit
-	if p, ok := c.byModel[model]; ok {
-		return p, model, true
-	}
-	// 2. display-name alias -> slug
 	if s, ok := c.aliases[model]; ok {
-		if p, ok := c.byModel[s]; ok {
-			return p, s, true
-		}
+		return s
 	}
-	// 3. tolerate variant/prefix spellings, e.g. "openai/gpt-4o:free"
+	// tolerate variant/prefix spellings, e.g. "openai/gpt-4o:free"
 	norm := normalizeModelID(model)
-	if p, ok := c.byModel[norm]; ok {
-		return p, norm, true
-	}
 	if s, ok := c.aliases[norm]; ok {
-		if p, ok := c.byModel[s]; ok {
-			return p, s, true
-		}
+		return s
 	}
-	return ModelPricing{}, "", false
+	return normalizeModelID(model)
 }
 
-// ListModels fetches the full model catalog. The endpoint is public; the
-// management-key Authorization header is harmless to include.
-func (c *Client) ListModels(ctx context.Context) (*ModelCatalog, error) {
-	var raw modelsResponse
-	if err := c.Get(ctx, "/models", &raw); err != nil {
-		return nil, err
+// ProviderPrice returns the per-token price for a (model, provider) pair. It
+// resolves the model to its canonical slug and, if the per-provider list for
+// that model is not loaded yet, attempts a lazy fetch. ok is false when the
+// model is unknown, the provider is not among the model's endpoints, or the
+// endpoint list could not be fetched.
+func (c *ModelCatalog) ProviderPrice(ctx context.Context, model, provider string) (ModelPricing, bool) {
+	if c == nil {
+		return ModelPricing{}, false
 	}
-	cat := &ModelCatalog{
-		byModel: make(map[string]ModelPricing, len(raw.Data)),
-		aliases: make(map[string]string, len(raw.Data)),
+	canonical := c.canonical(model)
+
+	// Unknown model: short-circuit without touching the network.
+	c.mu.Lock()
+	known := c.known[canonical]
+	loaded := c.loaded[canonical]
+	c.mu.Unlock()
+	if !known {
+		return ModelPricing{}, false
 	}
 
-	for _, it := range raw.Data {
-		// Prefer the stable base id; fall back to the (dated) canonical slug
-		// when the id is missing so the entry is not silently dropped.
-		primary := normalizeModelID(it.ID)
-		if primary == "" {
-			primary = normalizeModelID(it.CanonicalSlug)
-			if primary == "" {
-				continue
-			}
+	if !loaded {
+		if err := c.loadProviders(ctx, canonical); err != nil {
+			return ModelPricing{}, false
+		}
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	byProv := c.providers[canonical]
+	if p, ok := byProv[provider]; ok {
+		return p, true
+	}
+	// Case-insensitive fallback for provider names.
+	for name, p := range byProv {
+		if strings.EqualFold(name, provider) {
+			return p, true
+		}
+	}
+	return ModelPricing{}, false
+}
+
+// loadProviders fetches and caches the per-provider pricing for a model. It is
+// safe to call concurrently; cache population is guarded by the mutex. Network
+// failures are not cached so a transient error retries on the next call.
+func (c *ModelCatalog) loadProviders(ctx context.Context, canonical string) error {
+	if canonical == "" {
+		return nil
+	}
+	endpoints, err := c.client.ProviderPricing(ctx, canonical)
+	if err != nil {
+		return err
+	}
+	prices := make(map[string]ModelPricing, len(endpoints))
+	for _, ep := range endpoints {
+		if ep.ProviderName == "" {
+			continue
 		}
 		p := ModelPricing{
-			Prompt:     parsePrice(it.Pricing.Prompt),
-			Completion: parsePrice(it.Pricing.Completion),
-			Cached:     parsePrice(it.Pricing.InputCacheRead),
-			Reasoning:  parsePrice(it.Pricing.InternalReasoning),
+			Prompt:     parsePrice(ep.Pricing.Prompt),
+			Completion: parsePrice(ep.Pricing.Completion),
+			Cached:     parsePrice(ep.Pricing.InputCacheRead),
+			Reasoning:  parsePrice(ep.Pricing.InternalReasoning),
 		}
-		// apply fallbacks
 		if p.Cached == 0 {
 			p.Cached = p.Prompt
 		}
 		if p.Reasoning == 0 {
 			p.Reasoning = p.Completion
 		}
-		cat.byModel[primary] = p
+		prices[ep.ProviderName] = p
+	}
+
+	c.mu.Lock()
+	c.providers[canonical] = prices
+	// Mark as loaded even if empty — the model is known; it may have no
+	// advertised per-provider pricing.
+	c.loaded[canonical] = true
+	c.mu.Unlock()
+	return nil
+}
+
+// ListModels fetches the model catalog and returns it ready for lazy
+// per-provider lookups. The management-key Authorization header is harmless to
+// include despite the endpoint being public.
+func (c *Client) ListModels(ctx context.Context) (*ModelCatalog, error) {
+	var raw modelsResponse
+	if err := c.Get(ctx, "/models", &raw); err != nil {
+		return nil, err
+	}
+	cat := &ModelCatalog{
+		client:    c,
+		aliases:   make(map[string]string),
+		known:     make(map[string]bool),
+		providers: make(map[string]map[string]ModelPricing),
+		loaded:    make(map[string]bool),
+	}
+
+	for _, it := range raw.Data {
+		slug := normalizeModelID(it.ID)
+		if slug == "" {
+			continue
+		}
+		cat.known[slug] = true
 		// Index the exact display name (colons, case and all) so lookups match
 		// whatever raw form comes back from callbacks.
-		if name := strings.TrimSpace(it.Name); name != "" && name != primary {
-			cat.aliases[name] = primary
+		if name := strings.TrimSpace(it.Name); name != "" && name != slug {
+			cat.aliases[name] = slug
 		}
 		// A model may be addressed by its dated canonical slug (e.g. an
 		// analytics row that pins a specific version); map it to the stable
 		// base id so both spellings resolve to the same price entry.
-		if cs := normalizeModelID(it.CanonicalSlug); cs != "" && cs != primary {
-			cat.aliases[cs] = primary
+		if cs := normalizeModelID(it.CanonicalSlug); cs != "" && cs != slug {
+			cat.aliases[cs] = slug
 		}
 	}
 	return cat, nil

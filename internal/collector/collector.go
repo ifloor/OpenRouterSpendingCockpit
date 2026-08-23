@@ -195,15 +195,17 @@ func (c *Collector) pollAggregate(ctx context.Context) {
 	}
 	c.store.UpdateAggregate(rows)
 
-	// Register the price for each model actually used in this window, so the
-	// price table fills in from real usage (not the whole catalog).
-	seenM := map[string]bool{}
+	// Register the price for each (model, provider) actually used in this
+	// window, so the price table fills in from real usage (not the whole
+	// catalog). A model may appear multiple times, once per provider.
+	seen := map[string]bool{}
 	for _, r := range rows {
-		if r.Model == "" || seenM[r.Model] {
+		key := r.Model + "\x00" + r.Provider
+		if r.Model == "" || seen[key] {
 			continue
 		}
-		seenM[r.Model] = true
-		c.pricingFor(ctx, r.Model)
+		seen[key] = true
+		c.pricingFor(ctx, r.Model, r.Provider)
 	}
 
 	c.updateRecent(rows)
@@ -294,53 +296,64 @@ func (c *Collector) ensureCatalog(ctx context.Context) error {
 	return nil
 }
 
-// pricingFor returns the per-token price for a model, loading the catalog on
-// first use. model may be a canonical slug or a display name (the catalog
-// indexes both). The resolved price is registered with the store under its
-// canonical slug, so the price table fills in from real usage and stays stable
-// even when a callback reports the display name. ok is false when the model is
-// unknown to the catalog (or the catalog could not be loaded).
-func (c *Collector) pricingFor(ctx context.Context, model string) (store.ModelPrice, bool) {
+// pricingFor resolves the per-token price for a (model, provider) pair,
+// loading the catalog on first use. The pair is registered with the store —
+// with Found=false when the price could not be resolved — so the price table
+// reflects real usage (model x provider) and surfaces unknowns explicitly. ok
+// is true only when a real price was found for the provider.
+func (c *Collector) pricingFor(ctx context.Context, model, provider string) (store.ModelPrice, bool) {
 	if err := c.ensureCatalog(ctx); err != nil {
 		log.Printf("pricing: catalog fetch failed: %v", err)
 		return store.ModelPrice{}, false
 	}
-	p, canonical, ok := c.catalog.Lookup(model)
-	if !ok {
-		c.logPricingMiss(model)
+	canonical := c.catalog.Canonical(model)
+	if canonical == "" {
+		canonical = model
+	}
+	sp := store.ModelPrice{Model: canonical, Provider: provider}
+	if provider == "" {
+		// Without a provider there is no reliable way to price the model (the
+		// catalog prices per provider); skip rather than record a false miss.
 		return store.ModelPrice{}, false
 	}
-	sp := store.ModelPrice{
-		Model:      canonical,
-		Prompt:     p.Prompt,
-		Cached:     p.Cached,
-		Completion: p.Completion,
-		Reasoning:  p.Reasoning,
+	if p, ok := c.catalog.ProviderPrice(ctx, model, provider); ok {
+		sp.Found = true
+		sp.Prompt = p.Prompt
+		sp.Cached = p.Cached
+		sp.Completion = p.Completion
+		sp.Reasoning = p.Reasoning
+		c.store.SetPrice(sp)
+		return sp, true
 	}
-	c.store.SetPrice(sp) // idempotent; first slug wins
-	return sp, true
+	// Explicitly surface a missing/unresolvable price for a used model x
+	// provider instead of hiding it.
+	c.store.SetPrice(sp)
+	c.logPricingMiss(model, provider)
+	return store.ModelPrice{}, false
 }
 
-// logPricingMiss logs (once per model) a lookup that did not match the
-// catalog, so unknown models stay visible without spamming every tick.
-func (c *Collector) logPricingMiss(model string) {
-	if c.missLogged[model] {
+// logPricingMiss logs (once per model+provider) a lookup that did not match
+// any provider price, so unknowns stay visible without spamming every tick.
+func (c *Collector) logPricingMiss(model, provider string) {
+	k := model + "\x00" + provider
+	if c.missLogged[k] {
 		return
 	}
-	c.missLogged[model] = true
-	log.Printf("pricing: model not found in /models catalog: %q", model)
+	c.missLogged[k] = true
+	log.Printf("pricing: no price found for %q (provider %q)", model, provider)
 }
 
 // applyPricing computes the per-column and total costs for a generation based
-// on the per-token price of its model. It prefers the canonical slug from the
-// drilldown (/generation model_permaslug) since the generation's display
-// `model` is a human label that may not match the catalog directly.
+// on the per-token price of its model+provider. It prefers the canonical slug
+// from the drilldown (/generation model_permaslug) since the generation's
+// display `model` is a human label that may not match the catalog directly,
+// and prices by the generation's provider.
 func (c *Collector) applyPricing(ctx context.Context, gi *store.GenerationInfo) {
 	id := gi.ModelPermaSlug
 	if id == "" || id == gi.Model {
 		id = gi.Model
 	}
-	p, ok := c.pricingFor(ctx, id)
+	p, ok := c.pricingFor(ctx, id, gi.Provider)
 	if !ok {
 		return
 	}

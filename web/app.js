@@ -39,12 +39,24 @@ function renderBalance(b) {
 function renderPrices(prices) {
   const tb = $("priceRows");
   tb.innerHTML = "";
-  const sorted = [...(prices || [])].sort((a, b) => (a.model || "").localeCompare(b.model || ""));
+  const sorted = [...(prices || [])].sort((a, b) =>
+    (a.model || "").localeCompare(b.model || "") || (a.provider || "").localeCompare(b.provider || ""));
   $("priceEmpty").classList.toggle("hidden", sorted.length > 0);
   for (const p of sorted) {
     const tr = document.createElement("tr");
+    if (!p.found) {
+      // Model is in use but its price could not be resolved per provider.
+      tr.className = "price-miss";
+      tr.innerHTML =
+        `<td class="model">${esc(p.model)}</td>` +
+        `<td class="provider">${esc(p.provider || "—")}</td>` +
+        `<td class="num" colspan="3"><span class="sub">preço não encontrado para o provedor</span></td>`;
+      tb.appendChild(tr);
+      continue;
+    }
     tr.innerHTML =
       `<td class="model">${esc(p.model)}</td>` +
+      `<td class="provider">${esc(p.provider || "—")}</td>` +
       `<td class="num">${fmtPerMTok(p.prompt)}</td>` +
       `<td class="num">${fmtPerMTok(p.cached)}</td>` +
       `<td class="num">${fmtPerMTok(p.completion)}</td>`;

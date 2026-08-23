@@ -41,6 +41,15 @@ const modelsBody = `{"data":[{
   "pricing":{"prompt":"0.00000014","completion":"0.00000028","input_cache_read":"0.000000028"}
 }]}`
 
+// modelEndpointsBody is the per-provider pricing for the model used in the
+// test, so the provider of the generation (DeepInfra) has a resolvable price.
+const modelEndpointsBody = `{"data":{
+  "id":"deepseek/deepseek-v4-flash",
+  "endpoints":[
+    {"provider_name":"DeepInfra","pricing":{"prompt":"0.00000014","completion":"0.00000028","input_cache_read":"0.000000028"}}
+  ]
+}}`
+
 const genBody = `{"data":{
   "id":"gen-1",
   "provider_name":"DeepInfra",
@@ -73,6 +82,8 @@ func (fakeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	case strings.HasPrefix(r.URL.Path, "/generation"):
 		_, _ = w.Write([]byte(genBody))
+	case strings.HasPrefix(r.URL.Path, "/models/") && strings.HasSuffix(r.URL.Path, "/endpoints"):
+		_, _ = w.Write([]byte(modelEndpointsBody))
 	case strings.HasPrefix(r.URL.Path, "/models"):
 		_, _ = w.Write([]byte(modelsBody))
 	default:
