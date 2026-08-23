@@ -58,19 +58,27 @@ function renderPrices(prices) {
     tr.innerHTML =
       `<td class="model">${esc(p.model)}</td>` +
       `<td class="provider">${esc(p.provider || "—")}</td>` +
-      `<td class="num">${fmtPerMTok(p.prompt)}</td>` +
       `<td class="num">${fmtPerMTok(p.cached)}</td>` +
+      `<td class="num">${fmtPerMTok(p.prompt)}</td>` +
       `<td class="num">${fmtPerMTok(p.completion)}</td>`;
     tb.appendChild(tr);
   }
 }
 
+const RECENT_VISIBLE = 3;
+let recentExpanded = false;
+let recentCache = [];
+
 function renderRecent(rows) {
+  recentCache = rows;
   const tb = $("recentRows");
   tb.innerHTML = "";
   $("recentEmpty").classList.toggle("hidden", rows.length > 0);
+
   const sorted = [...rows].sort((a, b) => new Date(b.minute) - new Date(a.minute));
-  for (const r of sorted) {
+  const limit = recentExpanded ? sorted.length : Math.min(RECENT_VISIBLE, sorted.length);
+  for (let i = 0; i < limit; i++) {
+    const r = sorted[i];
     const tr = document.createElement("tr");
     tr.innerHTML =
       `<td>${esc(r.minute)}</td>` +
@@ -81,7 +89,22 @@ function renderRecent(rows) {
       `<td class="num">${fmtInt(r.tokens)}</td>`;
     tb.appendChild(tr);
   }
+
+  const btn = $("recentToggle");
+  const hasHidden = sorted.length > RECENT_VISIBLE;
+  btn.classList.toggle("hidden", !hasHidden);
+  if (hasHidden) {
+    const hidden = sorted.length - (recentExpanded ? 0 : RECENT_VISIBLE);
+    btn.textContent = recentExpanded
+      ? "Ocultar linhas restantes"
+      : `Mostrar ${fmtInt(hidden)} ${hidden === 1 ? "linha" : "linhas"} restantes (${fmtInt(sorted.length)} no total)`;
+  }
 }
+
+$("recentToggle").addEventListener("click", () => {
+  recentExpanded = !recentExpanded;
+  renderRecent(recentCache);
+});
 
 function renderGenerations(rows) {
   const tb = $("genRows");

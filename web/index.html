@@ -32,14 +32,14 @@
       </div>
     </div>
     <div class="card card-prices">
-      <div class="label">Modelos — preço por milhão de tokens (in / in-cached / out)</div>
+      <div class="label">Modelos — preço por milhão de tokens (in-cached / in / out)</div>
       <table class="grid prices">
         <thead>
           <tr>
             <th>Modelo</th>
             <th>Provedor</th>
-            <th class="num">In</th>
             <th class="num">In-cached</th>
+            <th class="num">In</th>
             <th class="num">Out</th>
           </tr>
         </thead>
@@ -60,6 +60,9 @@
       </thead>
       <tbody id="recentRows"></tbody>
     </table>
+    <div class="toggle-wrap">
+      <button type="button" class="toggle-btn hidden" id="recentToggle"></button>
+    </div>
     <p class="empty" id="recentEmpty">Sem uso recente ainda.</p>
   </section>
 
