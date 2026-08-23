@@ -55,7 +55,7 @@ func main() {
 		}
 	}()
 
-	log.Printf("openrouter-costwatch starting (masked key: %s) on :%d interval %s", client.MaskedAPIKey(), *port, *interval)
+	log.Printf("openrouter-spending-cockpit starting (masked key: %s) on :%d interval %s", client.MaskedAPIKey(), *port, *interval)
 	go col.Run(ctx)
 
 	mux := http.NewServeMux()
