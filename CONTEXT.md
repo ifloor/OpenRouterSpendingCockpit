@@ -193,6 +193,19 @@ questionou carregar tudo de início; por isso ficou "só usados".
 e README.md modificado — **nada commitado ainda**. Origem está em `origin/main` (2 commits
 antigos "Initial idea files"). Considere `git add` + commit inicial do que está pronto.
 
+## CI / Docker (adicionado 2026-07-23)
+
+- `VERSION` (root) = valor da tag da imagem; workflow lê com `tr -d '[:space:]'`.
+- `.github/workflows/main.yml`: push em `main` → buildx+QEMU (amd64+arm64) →
+  `docker/login-action` (secrets `DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN`) → push
+  `ifloor/openrouter-spending-cockpit:<version>`. Padrão baseado em
+  `ifloor/ElasticNotifier` (mesmos nomes de secrets).
+- `cicd/Dockerfile`: multi-stage `golang:1.26.5` → `alpine:3.22` (ca-certificates +
+  tzdata), binário `orcmon` em `/usr/local/bin/orcmon`, EXPOSE 8080,
+  ENTRYPOINT `orcmon` (flags via env/flags docker).
+- `.dockerignore`: exclui `.git`, `.idea`, `*.md`, `VERSION`.
+- Release = editar `VERSION` + push.
+
 ## Próximos passos candidatos (não finalizados)
 
 - **Diagnosticar e corrigir o BUG pendente da tabela de preços vazia** (ver seção acima).

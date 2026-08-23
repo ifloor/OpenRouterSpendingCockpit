@@ -39,6 +39,27 @@ Abra http://127.0.0.1:8080
 | `-interval` | `5s` | Intervalo de polling (teste com `2s` ou `60s`). |
 | `-v` | off | Logs verbosos do collector. |
 
+## Docker / CI
+
+A cada push para `main`, o GitHub Actions (`.github/workflows/main.yml`) faz build
+da imagem (multi-arch `linux/amd64` + `linux/arm64`) e publica no Docker Hub com a
+tag vinda do ficheiro `VERSION` na raiz do repo:
+
+`ifloor/openrouter-spending-cockpit:<version>`
+
+Para fazer um novo release, basta editar o `VERSION` e fazer push (ex.: `0.1.0` → `0.1.1`).
+
+Secrets necessários no repo: `DOCKERHUB_USERNAME` e `DOCKERHUB_TOKEN`.
+
+O Dockerfile está em `cicd/Dockerfile` (build multi-stage: `golang:1.26.5` → `alpine`).
+
+```sh
+# correr a imagem
+docker run --rm -p 8080:8080 \
+  -e OPENROUTER_MANAGEMENT_KEY=sk-or-... \
+  ifloor/openrouter-spending-cockpit:0.1.0
+```
+
 ## Como funciona
 
 - Coleta periodicamente `GET /credits` (saldo), `POST /analytics/query` em dois modos e `GET /generation` para enriquecer chamadas.
