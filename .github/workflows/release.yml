@@ -1,0 +1,101 @@
+name: Release Binaries
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Force re-creating the release for the current VERSION"
+        required: false
+        type: choice
+        options: ["false", "true"]
+        default: "false"
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read project VERSION
+        id: version
+        run: |
+          v="$(tr -d '[:space:]' < VERSION)"
+          if [ -z "$v" ]; then
+            echo "VERSION file is missing or empty" >&2
+            exit 1
+          fi
+          echo "current-version=${v}" >> "$GITHUB_OUTPUT"
+
+      - name: Check if release already exists
+        id: exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="v${{ steps.version.outputs.current-version }}"
+          force="${{ github.event.inputs.force || 'false' }}"
+          if [ "$force" = "true" ]; then
+            echo "force=true — will re-create release $TAG"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          elif gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists — skipping (use workflow_dispatch with force=true to re-create)"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No release $TAG yet — will create it"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Go
+        if: steps.exists.outputs.skip == 'false'
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.5'
+          cache: false
+
+      - name: Build binaries
+        if: steps.exists.outputs.skip == 'false'
+        run: |
+          mkdir -p dist
+          name="openrouter-spending-cockpit"
+          v="${{ steps.version.outputs.current-version }}"
+          build() {
+            local goos="$1" goarch="$2" ext=""
+            [ "$goos" = "windows" ] && ext=".exe"
+            CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" \
+              go build -trimpath -ldflags="-s -w" \
+              -o "dist/${name}-${v}-${goos}-${goarch}${ext}" .
+          }
+          build linux amd64
+          build linux arm64
+          build darwin amd64
+          build darwin arm64
+          build windows amd64
+          ls -lh dist/
+
+      - name: Create GitHub Release
+        if: steps.exists.outputs.skip == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="v${{ steps.version.outputs.current-version }}"
+          gh release delete "$TAG" --yes >/dev/null 2>&1 || true
+          gh release create "$TAG" \
+            --title "OpenRouter Spending Cockpit $TAG" \
+            --notes "OpenRouter Spending Cockpit ${TAG}
+
+Binaries (static, no dependencies):
+
+- Linux: amd64, arm64
+- macOS: amd64 (Intel), arm64 (Apple Silicon)
+- Windows: amd64
+
+Run:
+
+    ./openrouter-spending-cockpit-${{ steps.version.outputs.current-version }}-<os>-<arch> -api-key sk-or-...
+
+Flags: -port (8080), -interval (5s), -v. The key can also be set via the
+OPENROUTER_MANAGEMENT_KEY environment variable. Open
+http://127.0.0.1:8080 after start." \
+            dist/*

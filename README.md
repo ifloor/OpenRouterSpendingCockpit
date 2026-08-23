@@ -39,25 +39,26 @@ Abra http://127.0.0.1:8080
 | `-interval` | `5s` | Intervalo de polling (teste com `2s` ou `60s`). |
 | `-v` | off | Logs verbosos do collector. |
 
-## Docker / CI
+## Release / CI
 
-A cada push para `main`, o GitHub Actions (`.github/workflows/main.yml`) faz build
-da imagem (multi-arch `linux/amd64` + `linux/arm64`) e publica no Docker Hub com a
-tag vinda do ficheiro `VERSION` na raiz do repo:
+A cada push para `main`, o GitHub Actions (`.github/workflows/release.yml`) lê o
+ficheiro `VERSION` na raiz do repo, gera binários estáticos (sem dependências) e
+cria uma **GitHub Release** pública com a tag `v<version>`:
 
-`ifloor/openrouter-spending-cockpit:<version>`
+- Linux: `amd64`, `arm64`
+- macOS: `amd64` (Intel), `arm64` (Apple Silicon)
+- Windows: `amd64`
 
-Para fazer um novo release, basta editar o `VERSION` e fazer push (ex.: `0.1.0` → `0.1.1`).
+Para fazer um novo release, basta editar o `VERSION` (ex.: `0.1.0` → `0.1.1`) e
+fazer push — a release é criada automaticamente em
+https://github.com/ifloor/OpenRouterSpendingCockpit/releases.
 
-Secrets necessários no repo: `DOCKERHUB_USERNAME` e `DOCKERHUB_TOKEN`.
-
-O Dockerfile está em `cicd/Dockerfile` (build multi-stage: `golang:1.26.5` → `alpine`).
+Se a release da versão já existir, o workflow faz *skip* (para forçar a
+recriação, correr o workflow manualmente com `force=true`).
 
 ```sh
-# correr a imagem
-docker run --rm -p 8080:8080 \
-  -e OPENROUTER_MANAGEMENT_KEY=sk-or-... \
-  ifloor/openrouter-spending-cockpit:0.1.0
+# correr um binário da release
+./openrouter-spending-cockpit-0.1.0-linux-amd64 -api-key sk-or-...
 ```
 
 ## Como funciona
