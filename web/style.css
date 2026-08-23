@@ -81,7 +81,6 @@ body {
 .cards.cards-row { display: flex; flex-wrap: wrap; align-items: stretch; }
 .cards.cards-row > .card { flex: 1 1 180px; }
 
-.balance-pair { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; }
 .bp { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
 .bp-label { font-size: 12px; color: var(--muted); }
 .bp-value { font-size: 18px; font-weight: 700; }
@@ -100,6 +99,24 @@ body {
 .card .value { font-size: 22px; font-weight: 700; }
 .card .value.big { font-size: 30px; color: var(--ok); }
 .card .value.small { font-size: 14px; font-weight: 500; color: var(--muted); }
+
+/* Comprado/Usado: hidden, shown only on hover over the remaining value. */
+.balance-hover { position: relative; }
+.balance-hover .balance-tip {
+  display: none;
+  position: absolute;
+  top: calc(100% + 10px);
+  left: 0;
+  min-width: 150px;
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, .45);
+  z-index: 10;
+}
+.balance-hover:hover .balance-tip { display: block; }
+.balance-hover:not(.has-data) .balance-tip { display: none !important; }
 
 .panel {
   background: var(--panel);

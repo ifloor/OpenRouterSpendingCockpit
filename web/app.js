@@ -34,6 +34,7 @@ function renderBalance(b) {
   $("remaining").textContent = b && b.bought >= 0 ? fmtMoney(b.remaining, 2) : "aguardando…";
   $("used").textContent = b && b.bought >= 0 ? fmtMoney(b.used, 2) : "—";
   $("bought").textContent = b && b.bought >= 0 ? fmtMoney(b.bought, 2) : "—";
+  $("balanceHover").classList.toggle("has-data", !!(b && b.bought >= 0));
 }
 
 function renderPrices(prices) {
