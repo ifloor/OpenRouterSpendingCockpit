@@ -81,21 +81,22 @@ jobs:
         run: |
           TAG="v${{ steps.version.outputs.current-version }}"
           gh release delete "$TAG" --yes >/dev/null 2>&1 || true
+          NOTES="OpenRouter Spending Cockpit ${TAG}
+
+          Binaries (static, no dependencies):
+
+          - Linux: amd64, arm64
+          - macOS: amd64 (Intel), arm64 (Apple Silicon)
+          - Windows: amd64
+
+          Run:
+
+              ./openrouter-spending-cockpit-${TAG}-<os>-<arch> -api-key sk-or-...
+
+          Flags: -port (8080), -interval (5s), -v. The key can also be set via
+          the OPENROUTER_MANAGEMENT_KEY environment variable. Open
+          http://127.0.0.1:8080 after start."
           gh release create "$TAG" \
             --title "OpenRouter Spending Cockpit $TAG" \
-            --notes "OpenRouter Spending Cockpit ${TAG}
-
-Binaries (static, no dependencies):
-
-- Linux: amd64, arm64
-- macOS: amd64 (Intel), arm64 (Apple Silicon)
-- Windows: amd64
-
-Run:
-
-    ./openrouter-spending-cockpit-${{ steps.version.outputs.current-version }}-<os>-<arch> -api-key sk-or-...
-
-Flags: -port (8080), -interval (5s), -v. The key can also be set via the
-OPENROUTER_MANAGEMENT_KEY environment variable. Open
-http://127.0.0.1:8080 after start." \
+            --notes "$NOTES" \
             dist/*
